@@ -1,0 +1,15 @@
+{
+  "name": "walabean",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Walabean - a 3D multiplayer island battle game",
+  "scripts": {
+    "install:all": "npm install && npm install --prefix server && npm install --prefix client",
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
