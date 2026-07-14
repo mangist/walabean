@@ -4,7 +4,8 @@ import { create } from 'zustand';
 export const useGameStore = create((set) => ({
   phase: 'lobby', // lobby | connecting | playing | over
   gameCode: null, // 4-char room code once in a game
-  winner: null, // {id, name} when the game is over
+  isHost: false, // this client created the room (can restart it)
+  winner: null, // {id, name, defeated:[names]} when the game is over
   joinError: null, // 'not_found' | 'full' | 'over' | null
   selfId: null,
   players: [], // latest server snapshot (includes self)
@@ -15,6 +16,7 @@ export const useGameStore = create((set) => ({
   nearby: null, // {id, kind} of the closest pickable item, or null
   aiming: false, // mouse held down — trajectory arc is showing
   aimScreen: { x: 0, y: 0 }, // crosshair offset in NDC (x right, y up); 0,0 = center
+  campWarn: null, // null = fine; >0 = seconds until drain; 0 = currently draining
   projectiles: [], // in-flight throws (local + remote)
   effects: [], // transient visuals (explosions)
 
@@ -51,6 +53,7 @@ export const useGameStore = create((set) => ({
   setNearby: (nearby) => set({ nearby }),
   setAiming: (aiming) => set({ aiming }),
   setAimScreen: (x, y) => set({ aimScreen: { x, y } }),
+  setCampWarn: (campWarn) => set({ campWarn }),
 
   upsertItem: (item) =>
     set((state) => {

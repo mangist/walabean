@@ -54,6 +54,11 @@ export const PROJECTILE_LIFETIME = 6; // seconds before a stray throw despawns
 // Combat
 export const MAX_HEALTH = 100;
 export const MAX_LIVES = 3;
+
+// Anti-camping (mirrors the server): stand still this long and you bleed health.
+export const CAMP_TIMEOUT = 10; // seconds before the drain starts
+export const CAMP_WARN_AT = 7; // seconds before showing the "keep moving" warning
+export const CAMP_MOVE_THRESH = 0.2; // horizontal units that count as moving
 export const PLAYER_HIT_RADIUS = 0.9; // projectile-to-player body radius
 export const DAMAGE = { rock: 10, coconut: 30, arrow: 50, bomb: 100 };
 

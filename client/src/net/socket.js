@@ -51,11 +51,12 @@ export function connect() {
     }
   });
 
-  socket.on('game:init', ({ selfId, code, players, items }) => {
+  socket.on('game:init', ({ selfId, code, host, players, items }) => {
     history.replaceState(null, '', `?g=${code}`);
     useGameStore.setState({
       phase: 'playing',
       gameCode: code,
+      isHost: !!host,
       winner: null,
       joinError: null,
       selfId,
@@ -64,14 +65,22 @@ export function connect() {
     });
   });
 
+  // Host restarted the room — everyone re-enters a fresh round.
+  socket.on('game:restarted', ({ players, items }) => {
+    useGameStore.setState({ phase: 'playing', winner: null, players, items });
+  });
+
   socket.on('join:error', ({ reason }) => {
     // A failed auto-rejoin: drop the dead code from the URL and show the lobby.
     history.replaceState(null, '', location.pathname);
     useGameStore.setState({ phase: 'lobby', joinError: reason, gameCode: null });
   });
 
-  socket.on('game:over', ({ winnerId, winnerName }) => {
-    useGameStore.setState({ phase: 'over', winner: { id: winnerId, name: winnerName } });
+  socket.on('game:over', ({ winnerId, winnerName, defeated }) => {
+    useGameStore.setState({
+      phase: 'over',
+      winner: { id: winnerId, name: winnerName, defeated: defeated || [] },
+    });
   });
 
   socket.on('game:state', ({ players }) => {
@@ -124,6 +133,11 @@ export function hostGame() {
 export function joinGame(code) {
   useGameStore.setState({ phase: 'connecting', joinError: null });
   socket?.emit('game:join', { code: (code || '').toUpperCase(), token: getToken() });
+}
+
+// Host asks the server to reset the finished room into a fresh round.
+export function requestRestart() {
+  socket?.emit('game:restart');
 }
 
 // Called from the local player's frame loop (throttled there).

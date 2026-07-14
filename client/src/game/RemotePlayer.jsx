@@ -32,7 +32,7 @@ function HealthBar3D({ health }) {
 }
 
 // Renders another player's bean, smoothing toward the latest server snapshot.
-export default function RemotePlayer({ player }) {
+export default function RemotePlayer({ player, winnerId }) {
   const group = useRef();
 
   useFrame((_, delta) => {
@@ -47,7 +47,12 @@ export default function RemotePlayer({ player }) {
 
   return (
     <group ref={group} position={[player.position.x, player.position.y, player.position.z]}>
-      <Character color={player.color} name={player.name} />
+      <Character
+        color={player.color}
+        name={player.name}
+        fallen={player.alive === false}
+        winner={winnerId === player.id}
+      />
       <HealthBar3D health={player.health} />
     </group>
   );

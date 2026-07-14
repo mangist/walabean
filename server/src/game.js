@@ -23,6 +23,11 @@ const MIN_STONES_PER_ISLAND = 5;
 const RESPAWN_DELAY_MS = 3000;
 const DISCONNECT_GRACE_MS = 30000; // keep a slot this long so refresh can rejoin
 
+// Anti-camping: stand still (horizontally) for this long and you bleed health.
+const CAMP_TIMEOUT_MS = 10000;
+const CAMP_DPS = 5; // health drained per second while camping
+const CAMP_MOVE_THRESH_SQ = 0.04; // ~0.2 units of movement resets the timer
+
 const games = new Map(); // code -> game
 let dropCounter = 0;
 
@@ -47,6 +52,8 @@ export function createGame() {
     over: false,
     winnerId: null,
     everHadTwo: false,
+    hostToken: null, // token of the player who created the room
+    generation: 0, // bumped on restart to invalidate stale respawn timers
   };
   games.set(code, game);
   return game;
@@ -107,6 +114,8 @@ export function addPlayer(game, socketId, name, token) {
     disconnected: false,
     removeTimer: null,
     inventory: { ...STARTING_INVENTORY },
+    lastMoveAt: Date.now(),
+    lastMovePos: { x: spawn.x, z: spawn.z },
   };
   game.players.set(socketId, player);
   if (game.players.size >= 2) game.everHadTwo = true;
@@ -125,6 +134,9 @@ export function reattachPlayer(game, newSocketId, token) {
   }
   existing.id = newSocketId;
   existing.disconnected = false;
+  // Fresh anti-camp grace after a refresh.
+  existing.lastMoveAt = Date.now();
+  existing.lastMovePos = { x: existing.position.x, z: existing.position.z };
   game.players.set(newSocketId, existing);
   return existing;
 }
@@ -144,7 +156,17 @@ export function markDisconnected(game, socketId, onRemoved) {
 export function updatePlayerTransform(game, socketId, { position, rotation } = {}) {
   const player = game.players.get(socketId);
   if (!player || !player.alive) return;
-  if (position) player.position = position;
+  if (position) {
+    // Reset the anti-camp timer only on real horizontal movement.
+    const lp = player.lastMovePos;
+    const dx = position.x - lp.x;
+    const dz = position.z - lp.z;
+    if (dx * dx + dz * dz > CAMP_MOVE_THRESH_SQ) {
+      player.lastMovePos = { x: position.x, z: position.z };
+      player.lastMoveAt = Date.now();
+    }
+    player.position = position;
+  }
   if (typeof rotation === 'number') player.rotation = rotation;
 }
 
@@ -172,9 +194,44 @@ export function checkWin(game) {
     game.over = true;
     const winner = living[0] || null;
     game.winnerId = winner?.id ?? null;
-    return { winnerId: game.winnerId, winnerName: winner?.name ?? null };
+    // Stand the champion back up, full health — they survived (and may have
+    // just been mid-respawn or bled out to camping as the last blow landed).
+    if (winner) {
+      winner.alive = true;
+      winner.health = MAX_HEALTH;
+    }
+    const defeated = [...game.players.values()]
+      .filter((p) => p.id !== game.winnerId)
+      .map((p) => p.name);
+    return { winnerId: game.winnerId, winnerName: winner?.name ?? null, defeated };
   }
   return null;
+}
+
+export function isHost(game, socketId) {
+  const p = game.players.get(socketId);
+  return !!p && p.token != null && p.token === game.hostToken;
+}
+
+// Host restart: reset everyone to a fresh round in the same room/code.
+export function restartGame(game) {
+  game.over = false;
+  game.winnerId = null;
+  game.items = createItems();
+  game.generation += 1; // invalidate any pending respawn timers
+  for (const p of game.players.values()) {
+    const spawn = ISLANDS[p.island];
+    p.health = MAX_HEALTH;
+    p.lives = MAX_LIVES;
+    p.alive = true;
+    p.dead = false;
+    p.position = { x: spawn.x, y: SPAWN_HEIGHT, z: spawn.z };
+    p.rotation = 0;
+    p.inventory = { ...STARTING_INVENTORY };
+    p.lastMoveAt = Date.now();
+    p.lastMovePos = { x: spawn.x, z: spawn.z };
+  }
+  game.everHadTwo = game.players.size >= 2;
 }
 
 // --- Actions ----------------------------------------------------------------
@@ -251,7 +308,34 @@ export function landProjectile(game, kind, position) {
   return item;
 }
 
-// Apply damage. Handles lives, respawn, permanent death and win detection.
+// A player's health hit 0: lose a life and respawn, or be eliminated. Returns
+// { permanent, win }. Shared by combat damage and anti-camp drain.
+function loseLife(game, target) {
+  target.alive = false;
+  target.lives -= 1;
+  let permanent = false;
+
+  if (target.lives > 0) {
+    const gen = game.generation;
+    setTimeout(() => {
+      const p = game.players.get(target.id);
+      if (!p || game.over || game.generation !== gen) return; // stale after restart
+      const spawn = ISLANDS[p.island];
+      p.health = MAX_HEALTH;
+      p.alive = true;
+      p.position = { x: spawn.x, y: SPAWN_HEIGHT, z: spawn.z };
+      p.lastMoveAt = Date.now();
+      p.lastMovePos = { x: spawn.x, z: spawn.z };
+    }, RESPAWN_DELAY_MS);
+  } else {
+    permanent = true;
+    target.dead = true; // eliminated for good
+  }
+
+  return { permanent, win: checkWin(game) };
+}
+
+// Apply combat damage. Handles lives, respawn, permanent death, win detection.
 export function damagePlayer(game, targetId, kind) {
   const target = game.players.get(targetId);
   const dmg = DAMAGE[kind];
@@ -260,28 +344,29 @@ export function damagePlayer(game, targetId, kind) {
   target.health = Math.max(0, target.health - dmg);
   if (target.health > 0) return { target, dead: false, permanent: false, win: null };
 
-  // Died this life.
-  target.alive = false;
-  target.lives -= 1;
-  let permanent = false;
-
-  if (target.lives > 0) {
-    // Respawn on their island after a short delay.
-    setTimeout(() => {
-      const p = game.players.get(targetId);
-      if (!p || game.over) return;
-      const spawn = ISLANDS[p.island];
-      p.health = MAX_HEALTH;
-      p.alive = true;
-      p.position = { x: spawn.x, y: SPAWN_HEIGHT, z: spawn.z };
-    }, RESPAWN_DELAY_MS);
-  } else {
-    permanent = true;
-    target.dead = true; // eliminated for good
-  }
-
-  const win = checkWin(game);
+  const { permanent, win } = loseLife(game, target);
   return { target, dead: true, permanent, win };
+}
+
+// Drain health from players who have stood still past the camp timeout. Called
+// on an interval with the seconds elapsed since the last call. Returns an
+// array of death events (with any `win`) to broadcast; ongoing health loss
+// rides along in the normal snapshot.
+export function applyCampDamage(game, dtSec) {
+  if (game.over) return [];
+  const now = Date.now();
+  const deaths = [];
+  for (const p of game.players.values()) {
+    if (!p.alive || p.disconnected || p.health <= 0) continue;
+    if (now - p.lastMoveAt < CAMP_TIMEOUT_MS) continue;
+    p.health = Math.max(0, p.health - CAMP_DPS * dtSec);
+    if (p.health <= 0) {
+      p.health = 0;
+      const { permanent, win } = loseLife(game, p);
+      deaths.push({ id: p.id, health: 0, lives: p.lives, dead: true, permanent, win });
+    }
+  }
+  return deaths;
 }
 
 export function replenishStones(game) {

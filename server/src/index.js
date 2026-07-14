@@ -23,8 +23,11 @@ import {
   knockCoconut,
   landProjectile,
   damagePlayer,
+  applyCampDamage,
   replenishStones,
   checkWin,
+  isHost,
+  restartGame,
 } from './game.js';
 
 const PORT = process.env.PORT || 3001;
@@ -63,6 +66,7 @@ io.on('connection', (socket) => {
     socket.emit('game:init', {
       selfId: socket.id,
       code: g.code,
+      host: isHost(g, socket.id),
       players: snapshot(g),
       items: itemList(g),
     });
@@ -76,6 +80,7 @@ io.on('connection', (socket) => {
       socket.emit('join:error', { reason: 'full' });
       return;
     }
+    g.hostToken = player.token; // this player owns the room
     console.log(`[host] ${player.name} created ${g.code}`);
     sendInit(player, g);
   });
@@ -159,6 +164,17 @@ io.on('connection', (socket) => {
     if (result.win) io.to(game.code).emit('game:over', result.win);
   });
 
+  // Host-only: reset the room and start a fresh round for everyone present.
+  socket.on('game:restart', () => {
+    if (!game || !game.over || !isHost(game, socket.id)) return;
+    restartGame(game);
+    console.log(`[restart] ${game.code}`);
+    io.to(game.code).emit('game:restarted', {
+      players: snapshot(game),
+      items: itemList(game),
+    });
+  });
+
   socket.on('disconnect', () => {
     if (!game) return;
     const g = game;
@@ -187,6 +203,24 @@ setInterval(() => {
     for (const item of spawned) io.to(g.code).emit('item:spawned', item);
   });
 }, 3000);
+
+// Anti-camping: drain health from players standing still (health rides the
+// snapshot; only broadcast deaths/wins here). Runs once per second (5 HP/s).
+setInterval(() => {
+  eachGame((g) => {
+    for (const e of applyCampDamage(g, 1)) {
+      io.to(g.code).emit('player:damaged', {
+        id: e.id,
+        health: e.health,
+        lives: e.lives,
+        kind: 'camp',
+        dead: e.dead,
+        permanent: e.permanent,
+      });
+      if (e.win) io.to(g.code).emit('game:over', e.win);
+    }
+  });
+}, 1000);
 
 server.listen(PORT, () => {
   console.log(`walabean server listening on http://localhost:${PORT}`);

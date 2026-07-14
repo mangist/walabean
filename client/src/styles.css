@@ -162,6 +162,19 @@ canvas {
   margin: 8px 0 24px;
 }
 
+.modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 220px;
+}
+
+.modal-hint {
+  margin-top: 14px;
+  font-size: 13px;
+  opacity: 0.65;
+}
+
 .hud {
   position: fixed;
   inset: 0;
@@ -355,6 +368,33 @@ canvas {
   border-radius: 8px;
   padding: 8px 16px;
   text-shadow: none;
+}
+
+.camp-warn {
+  position: absolute;
+  top: 20%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 16px;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.55);
+  border: 2px solid rgba(232, 178, 58, 0.85);
+  color: #ffd479;
+  border-radius: 10px;
+  padding: 8px 18px;
+  text-shadow: none;
+  white-space: nowrap;
+}
+
+.camp-warn.draining {
+  border-color: #e14b3b;
+  color: #ff8f7e;
+  animation: camp-pulse 0.7s ease-in-out infinite;
+}
+
+@keyframes camp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 .legend {

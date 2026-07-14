@@ -1,7 +1,9 @@
-// Procedural audio engine (Web Audio API) — no asset files. Synthesizes an
-// aggressive, high-energy metal loop for background music plus one-shot SFX
-// for gameplay actions. Everything is generated with oscillators + noise +
-// distortion so it stays self-contained.
+// Audio engine: background music from an mp3 track, plus procedurally
+// synthesized one-shot SFX for gameplay actions (Web Audio API). The music
+// element is routed through the same gain graph as the SFX so the mute toggle
+// controls everything.
+
+import musicUrl from './music/the_mountain-game-game-music-508018.mp3';
 
 let ctx = null;
 let master = null; // mute gate
@@ -10,16 +12,8 @@ let sfxGain = null;
 let noiseBuffer = null;
 let muted = false;
 
-let musicOn = false;
-let schedulerId = null;
-let step = 0;
-let nextNoteTime = 0;
-
-const BPM = 100; // mellow synthwave tempo
-const SIXTEENTH = 60 / BPM / 4;
-const STEPS = 64; // 4-bar loop
-const LOOKAHEAD_MS = 25;
-const SCHEDULE_AHEAD = 0.12;
+let musicEl = null; // HTMLAudioElement for the background track
+let musicSource = null; // MediaElementSourceNode feeding the graph
 
 function ensureCtx() {
   if (ctx) return;
@@ -32,20 +26,27 @@ function ensureCtx() {
   master.connect(ctx.destination);
 
   musicGain = ctx.createGain();
-  musicGain.gain.value = 0.32;
+  musicGain.gain.value = 0.6;
   musicGain.connect(master);
 
   sfxGain = ctx.createGain();
   sfxGain.gain.value = 0.9;
   sfxGain.connect(master);
 
-  // 1s of white noise, reused for drums/whooshes/explosions.
+  // Looping background track, routed through the graph so mute/volume apply.
+  musicEl = new Audio(musicUrl);
+  musicEl.loop = true;
+  musicEl.preload = 'auto';
+  musicSource = ctx.createMediaElementSource(musicEl);
+  musicSource.connect(musicGain);
+
+  // 1s of white noise, reused by the noise-based SFX.
   noiseBuffer = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
   const data = noiseBuffer.getChannelData(0);
   for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
 }
 
-// Harsh clipping curve for the distorted guitar tone.
+// Harsh clipping curve for the distorted SFX tones.
 function makeDistortionCurve(amount) {
   const n = 8192;
   const curve = new Float32Array(n);
@@ -64,179 +65,19 @@ function noiseSource() {
   return src;
 }
 
-// --- Music voices (mellow synthwave) ----------------------------------------
-
-const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12); // MIDI note -> Hz
-
-// 4-bar progression in A minor: Am – F – C – G. Each bar has a sustained pad
-// triad (MIDI, octave 3-4) and a bass root an octave+ below.
-const PROG = [
-  { pad: [57, 60, 64], bass: 45 }, // Am
-  { pad: [53, 57, 60], bass: 41 }, // F
-  { pad: [60, 64, 67], bass: 48 }, // C
-  { pad: [55, 59, 62], bass: 43 }, // G
-];
-
-// Warm detuned-saw pad with a slow filter sweep and soft attack/release.
-function pad(time, midis, dur) {
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.frequency.setValueAtTime(650, time);
-  lp.frequency.linearRampToValueAtTime(1600, time + dur * 0.5);
-  lp.frequency.linearRampToValueAtTime(700, time + dur);
-  lp.Q.value = 4;
-
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, time);
-  g.gain.linearRampToValueAtTime(0.16, time + 0.3); // slow swell
-  g.gain.setValueAtTime(0.16, time + dur - 0.35);
-  g.gain.linearRampToValueAtTime(0.0001, time + dur);
-  lp.connect(g);
-  g.connect(musicGain);
-
-  for (const m of midis) {
-    const f = mtof(m);
-    for (const det of [-7, 7]) {
-      const o = ctx.createOscillator();
-      o.type = 'sawtooth';
-      o.frequency.value = f;
-      o.detune.value = det; // slight detune = analog warmth/width
-      o.connect(lp);
-      o.start(time);
-      o.stop(time + dur + 0.05);
-    }
-  }
-}
-
-// Round synth bass (saw through a low lowpass).
-function bass(time, freq, dur) {
-  const o = ctx.createOscillator();
-  o.type = 'sawtooth';
-  o.frequency.value = freq;
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.frequency.value = 480;
-  lp.Q.value = 2;
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, time);
-  g.gain.exponentialRampToValueAtTime(0.3, time + 0.02);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
-  o.connect(lp);
-  lp.connect(g);
-  g.connect(musicGain);
-  o.start(time);
-  o.stop(time + dur + 0.02);
-}
-
-// Bright plucky arpeggio note.
-function arp(time, freq, dur) {
-  const o = ctx.createOscillator();
-  o.type = 'triangle';
-  o.frequency.value = freq;
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.frequency.value = 2800;
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, time);
-  g.gain.exponentialRampToValueAtTime(0.12, time + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
-  o.connect(lp);
-  lp.connect(g);
-  g.connect(musicGain);
-  o.start(time);
-  o.stop(time + dur + 0.02);
-}
-
-// Soft four-on-the-floor drums.
-function kick(time) {
-  const o = ctx.createOscillator();
-  const g = ctx.createGain();
-  o.frequency.setValueAtTime(120, time);
-  o.frequency.exponentialRampToValueAtTime(48, time + 0.12);
-  g.gain.setValueAtTime(0.6, time);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.22);
-  o.connect(g);
-  g.connect(musicGain);
-  o.start(time);
-  o.stop(time + 0.24);
-}
-
-function snare(time) {
-  const n = noiseSource();
-  const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = 1400;
-  bp.Q.value = 0.8;
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.26, time);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.18);
-  n.connect(bp);
-  bp.connect(g);
-  g.connect(musicGain);
-  n.start(time);
-  n.stop(time + 0.2);
-}
-
-function hat(time) {
-  const n = noiseSource();
-  const hp = ctx.createBiquadFilter();
-  hp.type = 'highpass';
-  hp.frequency.value = 8500;
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.07, time);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.03);
-  n.connect(hp);
-  hp.connect(g);
-  g.connect(musicGain);
-  n.start(time);
-  n.stop(time + 0.04);
-}
-
-function scheduleStep(s, time) {
-  const bar = Math.floor(s / 16) % 4;
-  const chord = PROG[bar];
-  const b16 = s % 16;
-
-  // Sustained pad for the whole bar.
-  if (b16 === 0) pad(time, chord.pad, SIXTEENTH * 16 * 0.98);
-
-  // Bass + arp pulse on 8th notes.
-  if (b16 % 2 === 0) {
-    bass(time, mtof(chord.bass), SIXTEENTH * 2 * 0.9);
-    const seq = [chord.pad[0], chord.pad[1], chord.pad[2], chord.pad[1]];
-    const note = seq[(b16 / 2) % seq.length] + 12; // an octave up for shimmer
-    arp(time, mtof(note), SIXTEENTH * 2 * 0.85);
-  }
-
-  // Gentle four-on-the-floor with backbeat snare and offbeat hats.
-  if (b16 % 4 === 0) kick(time);
-  if (b16 === 4 || b16 === 12) snare(time);
-  if (b16 % 4 === 2) hat(time);
-}
-
-function scheduler() {
-  while (nextNoteTime < ctx.currentTime + SCHEDULE_AHEAD) {
-    scheduleStep(step, nextNoteTime);
-    nextNoteTime += SIXTEENTH;
-    step = (step + 1) % STEPS;
-  }
-}
+// --- Background music (mp3) --------------------------------------------------
 
 function startMusic() {
-  if (musicOn || !ctx) return;
-  musicOn = true;
-  step = 0;
-  nextNoteTime = ctx.currentTime + 0.08;
-  schedulerId = setInterval(scheduler, LOOKAHEAD_MS);
+  if (!musicEl || muted) return;
+  const p = musicEl.play();
+  if (p && p.catch) p.catch(() => {}); // ignore autoplay rejections
 }
 
 export function stopMusic() {
-  musicOn = false;
-  if (schedulerId) clearInterval(schedulerId);
-  schedulerId = null;
+  if (musicEl) musicEl.pause();
 }
 
-// --- One-shot SFX -----------------------------------------------------------
+// --- One-shot SFX ------------------------------------------------------------
 
 function tone(time, { type = 'square', from, to, dur, gain = 0.5, dist = false }) {
   const o = ctx.createOscillator();
@@ -366,10 +207,9 @@ if (import.meta.env.DEV) {
     sfx: (n, k) => playSfx(n, k),
     state: () => ({
       ctx: ctx ? ctx.state : 'none',
-      sampleRate: ctx ? ctx.sampleRate : null,
-      musicOn,
       muted,
-      scheduling: nextNoteTime,
+      musicPlaying: !!musicEl && !musicEl.paused,
+      musicTime: musicEl ? musicEl.currentTime : null,
     }),
   };
 }

@@ -116,6 +116,7 @@ export default function Hud() {
   const weapon = useGameStore((s) => s.weapon);
   const nearby = useGameStore((s) => s.nearby);
 
+  const campWarn = useGameStore((s) => s.campWarn);
   const self = players.find((p) => p.id === selfId);
   const eliminated = self && self.lives <= 0;
 
@@ -127,6 +128,13 @@ export default function Hud() {
       )}
       {eliminated && phase === 'playing' && (
         <div className="pickup-label">You were eliminated — spectating…</div>
+      )}
+      {phase === 'playing' && !eliminated && campWarn !== null && (
+        <div className={`camp-warn${campWarn === 0 ? ' draining' : ''}`}>
+          {campWarn === 0
+            ? '🩸 Camping! Losing 5 HP/s — MOVE!'
+            : `⚠ Keep moving! Health drains in ${campWarn}s`}
+        </div>
       )}
       {nearby && !eliminated && (
         <div className="pickup-label">

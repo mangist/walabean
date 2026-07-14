@@ -11,6 +11,7 @@ import { ISLANDS, COLORS } from './constants.js';
 export default function Scene() {
   const selfId = useGameStore((s) => s.selfId);
   const players = useGameStore((s) => s.players);
+  const winnerId = useGameStore((s) => s.winner?.id ?? null);
 
   const self = players.find((p) => p.id === selfId);
   const others = players.filter((p) => p.id !== selfId);
@@ -41,9 +42,9 @@ export default function Scene() {
       <Projectiles />
       <Effects />
 
-      {self && <LocalPlayer key={self.id} player={self} />}
+      {self && <LocalPlayer key={self.id} player={self} winnerId={winnerId} />}
       {others.map((p) => (
-        <RemotePlayer key={p.id} player={p} />
+        <RemotePlayer key={p.id} player={p} winnerId={winnerId} />
       ))}
     </>
   );

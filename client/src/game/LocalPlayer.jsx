@@ -20,6 +20,9 @@ import {
   WEAPON_ORDER,
   PROJECTILES,
   PICKUP_RADIUS,
+  CAMP_TIMEOUT,
+  CAMP_WARN_AT,
+  CAMP_MOVE_THRESH,
 } from './constants.js';
 
 const CHAR_RADIUS = 0.4; // horizontal collision radius of the bean
@@ -43,7 +46,7 @@ const ARC_SAMPLES = 34; // points sampled along the trajectory tube
 // large divergence (e.g. a respawn teleport).
 const RECONCILE_THRESHOLD = 4;
 
-export default function LocalPlayer({ player }) {
+export default function LocalPlayer({ player, winnerId }) {
   const group = useRef();
   const keys = useKeyboard();
   const { camera, gl, scene } = useThree();
@@ -53,6 +56,11 @@ export default function LocalPlayer({ player }) {
   const pitch = useRef(0.35);
   const netTimer = useRef(0);
   const lastThrow = useRef(-Infinity);
+
+  // Anti-camp warning tracking (mirrors the server's idle drain timer).
+  const campPos = useRef(null);
+  const campLastMove = useRef(0);
+  const lastCampWarn = useRef(undefined);
 
   // Aiming state (kept in refs so the frame loop reads them without re-renders).
   const aimNDC = useMemo(() => new THREE.Vector2(0, 0), []);
@@ -496,6 +504,37 @@ export default function LocalPlayer({ player }) {
       aimSolution.current = null;
     }
 
+    // Anti-camp warning: mirror the server's idle timer so the player gets a
+    // heads-up before (and while) health drains.
+    const nowSec = performance.now() / 1000;
+    if (!campPos.current) {
+      campPos.current = { x: g.position.x, z: g.position.z };
+      campLastMove.current = nowSec;
+    }
+    if (!alive) {
+      campPos.current.x = g.position.x;
+      campPos.current.z = g.position.z;
+      campLastMove.current = nowSec;
+      if (lastCampWarn.current !== null) {
+        lastCampWarn.current = null;
+        store.setCampWarn(null);
+      }
+    } else {
+      const cdx = g.position.x - campPos.current.x;
+      const cdz = g.position.z - campPos.current.z;
+      if (cdx * cdx + cdz * cdz > CAMP_MOVE_THRESH * CAMP_MOVE_THRESH) {
+        campPos.current.x = g.position.x;
+        campPos.current.z = g.position.z;
+        campLastMove.current = nowSec;
+      }
+      const idle = nowSec - campLastMove.current;
+      const warn = idle >= CAMP_TIMEOUT ? 0 : idle >= CAMP_WARN_AT ? Math.ceil(CAMP_TIMEOUT - idle) : null;
+      if (warn !== lastCampWarn.current) {
+        lastCampWarn.current = warn;
+        store.setCampWarn(warn);
+      }
+    }
+
     // Throttled network updates. While dead, stop reporting so the server's
     // respawn teleport isn't immediately overwritten by our stale position.
     netTimer.current += delta;
@@ -511,7 +550,13 @@ export default function LocalPlayer({ player }) {
           it to the (stale) server snapshot re-applied on every re-render and
           caused the movement jitter. Seeded once via useLayoutEffect. */}
       <group ref={group}>
-        <Character color={player.color} name={player.name} showName={false} />
+        <Character
+          color={player.color}
+          name={player.name}
+          showName={false}
+          fallen={player.alive === false}
+          winner={winnerId === player.id}
+        />
       </group>
       {/* Trajectory arc — geometry/visibility driven only from useFrame (no
           visible prop, which React would re-apply on every snapshot re-render
