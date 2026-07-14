@@ -1,4 +1,7 @@
 import http from 'node:http';
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
 import { TICK_RATE, ISLANDS, MAX_PLAYERS } from './constants.js';
@@ -30,6 +33,19 @@ const app = express();
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, maxPlayers: MAX_PLAYERS });
 });
+
+// Serve the built client from the same origin (single-service deploy, e.g.
+// Render). In local dev the client is served by Vite and client/dist won't
+// exist, so this is skipped.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const clientDist = path.resolve(__dirname, '../../client/dist');
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  // SPA fallback — hand any non-file route to index.html. (Socket.IO's own
+  // /socket.io/ requests are handled before Express, so they're unaffected.)
+  app.get('*', (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));
+  console.log(`serving client from ${clientDist}`);
+}
 
 const server = http.createServer(app);
 const io = new Server(server, {

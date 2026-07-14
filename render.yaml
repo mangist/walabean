@@ -1,0 +1,14 @@
+# Render Blueprint: one web service that builds the client and runs the
+# Node + Socket.IO server, which serves the built client from the same origin.
+# WebSockets are supported on all Render plans.
+services:
+  - type: web
+    name: walabean
+    runtime: node
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"

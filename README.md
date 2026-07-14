@@ -18,12 +18,21 @@ A 3D multiplayer browser game. Up to 3 players each spawn on their own beach isl
 - **server/** — Node.js + Express + Socket.IO (game state relay, 20 Hz snapshot broadcast)
 - **client/** — React + Vite + Three.js via @react-three/fiber and @react-three/drei, zustand for state
 
-## Deploying
+## Deploying (Render — single service)
 
-This is a split deploy — a static front-end and a **persistent** realtime server:
+The whole game runs as **one Render web service**: the build compiles the client
+to `client/dist`, and the Node + Socket.IO server serves those static files from
+the same origin as the realtime connection. WebSockets work on all Render plans,
+so nothing extra is needed for multiplayer.
 
-- **Front-end (client) → Vercel.** The repo's `vercel.json` builds `client/` and serves `client/dist`. In the Vercel project set the env var **`VITE_SERVER_URL`** to the game server's public HTTPS URL (e.g. `https://walabean-server.onrender.com`), then redeploy. Without it the client tries to reach the server on the page's own host and can't connect.
-- **Server → NOT Vercel.** The Socket.IO server needs a long-lived process with WebSockets; Vercel's serverless functions can't hold those connections. Deploy `server/` to an always-on host like **Render, Railway, or Fly.io** (build/start with `npm install && npm start` in the `server/` dir). Because the client is served over HTTPS, the server URL must be HTTPS/WSS (those hosts provide that automatically). The server already reflects any CORS origin, so the Vercel domain is allowed.
+The repo includes [`render.yaml`](render.yaml):
+
+- **Build command:** `npm run build` — installs server + client deps and runs `vite build`.
+- **Start command:** `npm run start` — `node server/src/index.js`, which serves `client/dist` and the socket server on Render's `$PORT`.
+
+To deploy: on [render.com](https://render.com), **New → Blueprint**, point it at this repo, and it reads `render.yaml`. (Or **New → Web Service** with the two commands above.) No env vars are required — the client connects to its own origin in production. The free plan sleeps after inactivity, so the first load after idle is slow.
+
+Local dev is unchanged: `npm run dev` runs the client (Vite :5173) and server (:3001) separately; the client talks to `:3001`.
 
 ## Getting started
 

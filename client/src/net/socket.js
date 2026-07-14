@@ -2,10 +2,15 @@ import { io } from 'socket.io-client';
 import { useGameStore } from '../store.js';
 import { playSfx } from '../audio/sound.js';
 
-// Connect to the game server on the same host the page was loaded from, so it
-// works both locally (localhost) and from another device on the LAN
-// (http://<host-ip>:5173 -> ws://<host-ip>:3001). Override with VITE_SERVER_URL.
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || `http://${location.hostname}:3001`;
+// Where the Socket.IO server lives:
+// - Production build (served by the Node server itself, e.g. on Render): the
+//   client and server share one origin, so connect to window.location.origin.
+// - Dev: the server is a separate process on port 3001 of the same host
+//   (works for localhost and other devices on the LAN).
+// - Override either with VITE_SERVER_URL.
+const SERVER_URL =
+  import.meta.env.VITE_SERVER_URL ||
+  (import.meta.env.PROD ? window.location.origin : `http://${location.hostname}:3001`);
 
 let socket = null;
 let projectileCounter = 0;
